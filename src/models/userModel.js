@@ -8,23 +8,39 @@ const userSchema = mongoose.Schema({
     }, 
     email: {
         type: String,
-        required: true
+        required: true,
+        unique: true
     },
     password: {
         type: String,
         required: true
     },
-    otp: {
+    emailOtp: {
         type: String,
         default: null
     },
-    isOtpVerified: {
+    isEmailOtpVerified: {
         type: Boolean,
         default: false
     },
-    otpExpiration: {
+    emailOtpExpiration: {
+        type: Date,
+        default: null
+    },
+    passwordOtp: {
         type: String,
         default: null
+    },
+    isPasswordOtpVerified: {
+        type: Boolean,
+        default: false
+    },
+    passwordOtpExpiration: {
+        type: Date,
+        default: null
+    },
+    refreshToken: {
+            type: String
     }
 }, 
 {

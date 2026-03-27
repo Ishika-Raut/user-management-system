@@ -1,4 +1,4 @@
-export const globalErrorHandler = (error, res, req, next) => {
+export const globalErrorHandler = (error, req, res, next) => {
 
     const statusCode = 500;
 

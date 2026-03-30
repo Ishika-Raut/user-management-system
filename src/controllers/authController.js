@@ -5,9 +5,12 @@ import { ApiError } from "../utils/apiError.js";
 import HTTP_STATUS from "../utils/httpStatusCodes.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { generateToken } from "../utils/generateToken.js";
-import jwt from "jsonwebtoken"
+import jwt from "jsonwebtoken";
 import { generateAccessAndRefreshTokens } from "../helpers/generateAccessAndRefreshTokens.js";
 import { sendEmail } from "../services/sendEmail.js";
+import { emailVerificationTemplate } from "../templates/emailVerificationTemplate.js";
+import { forgetPasswordTemplate } from "../templates/forgetPasswordTemplate.js";
+import { generateOTP } from "../utils/generateOTP.js";
 
 export const register = async (req, res, next) => {
     try 
@@ -16,21 +19,35 @@ export const register = async (req, res, next) => {
         if(!name || !email || !password)
             return ApiError(res, HTTP_STATUS.BAD_REQUEST, "All fields are required!");
 
-        const isExist = await User.findOne({email});
-        if(isExist)
+        const user = await User.findOne({email});
+        if(user)
             return ApiError(res, HTTP_STATUS.CONFLICT, `User already registered with ${email}`);
 
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
+        //generate 6-digit 
+        const otp = generateOTP();
+
+        //hash otp
+        const hashedOtp = await bcrypt.hash(otp, 10);
+
+        //set expiration time for generated otp
+        const expiredOtp = new Date(Date.now() + 5 * 60 * 1000);
+
         const newUser = await User.create({
             name, 
             email,
             password: hashedPassword,
-            isEmailOtpVerified: false
+            emailOtp: hashedOtp ,  //store hashed otp in user
+            isEmailVerified: false,
+            emailOtpExpiration: expiredOtp  //set expiration time for generated otp
         });
         
-        return ApiResponse(res, HTTP_STATUS.CREATED, "User registered successfully!",
+        const html = emailVerificationTemplate(otp)
+        await sendEmail(email,  "Email Verification", html);  
+
+        return ApiResponse(res, HTTP_STATUS.CREATED, "User registered successfully! OTP sent on your email.",
             {
                 name: newUser.name,
                 email: newUser.email
@@ -40,6 +57,48 @@ export const register = async (req, res, next) => {
     catch (error) 
     {
         console.log("Register user controller error", error);
+        next(error);
+    }
+}
+
+
+
+export const verifyOtp = async (req, res, next) => {
+    try 
+    {
+        const {email, otp} = req.body;
+        if(!email || !otp)
+            return ApiError(res, "All fields are required!", HTTP_STATUS.BAD_REQUEST);
+
+        //find user
+        const user = await User.findOne({email});
+        if(!user)
+            return ApiError(res, "User does not exist!", HTTP_STATUS.NOT_FOUND);
+
+        // Check OTP expiration
+        // user.otpExpiration time - 10:35
+        // new Date() - gives current date and time - 10:36
+        // 10:36 > 10:35 => true - OTP expired!
+        if (!user.emailOtpExpiration || new Date() > user.emailOtpExpiration) {
+            return ApiError(res, "OTP expired!", HTTP_STATUS.BAD_REQUEST);
+        }
+        
+        //match entered otp with stored otp in user db
+        const isOtpMatched = await bcrypt.compare(otp, user.emailOtp);
+        if(!isOtpMatched)
+            return ApiError(res, "Invalid OTP!", HTTP_STATUS.NOT_FOUND);
+
+        user.isEmailVerified = true;
+        user.emailOtp = null; 
+        user.emailOtpExpiration = null; 
+
+        await user.save();
+
+        return ApiResponse(res, HTTP_STATUS.OK, "User email is verified successfully!");
+    } 
+    catch (error) 
+    {
+        console.log("Verify otp controller error", error);
         next(error);
     }
 }
@@ -58,7 +117,7 @@ export const login = async (req, res, next) => {
         if(!user)
             return ApiError(res, HTTP_STATUS.NOT_FOUND, `User does not registered with ${email}`);
 
-        if(!user.isEmailOtpVerified)
+        if(!user.isEmailVerified)
             return ApiError(res, HTTP_STATUS.UNAUTHORIZED, `Your email is not verified!`);
 
         const isPasswordMatched = await bcrypt.compare(password, user.password);
@@ -115,6 +174,10 @@ export const login = async (req, res, next) => {
 
 //Why not use authenticate middleware for refresh route?
 //Middleware expects Authorization header, and Refresh token is in cookies
+
+//if user logs in and Access token expires Backend responds → 401 Unauthorized
+//401 -> It comes from your authentication middleware
+//NOT called manually by user. It is called automatically by frontend when access token expires.
 
 export const refreshAccessToken = async (req, res, next) => {
     try 
@@ -218,8 +281,8 @@ export const requestPasswordReset = async (req, res, next) => {
         if (!user) return ApiError(res, HTTP_STATUS.NOT_FOUND, "No user registered with this email");
 
          // Prevent unverified users from resetting password
-        if (!user.isEmailOtpVerified) {
-            return ApiError(res, HTTP_STATUS.UNAUTHORIZED, "Email is not verified. Please verify your email first.");
+        if (!user.isEmailVerified) {
+            return ApiError(res, HTTP_STATUS.UNAUTHORIZED, "Please verify your email first.");
         }
 
         //Generate secure token
@@ -237,7 +300,9 @@ export const requestPasswordReset = async (req, res, next) => {
         // Create reset link
         const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}&email=${email}`;
         console.log("Reset Link = ", resetLink);
-        await sendEmail(email, resetLink, "forgetPassword");
+
+        const html = forgetPasswordTemplate(resetLink)
+        await sendEmail(email, "Request for reset password" ,html);
 
         return ApiResponse(res, HTTP_STATUS.OK, "Password reset link sent to your email");
     } 
@@ -262,7 +327,7 @@ export const resetPassword = async (req, res, next) => {
         if (!user) return ApiError(res, HTTP_STATUS.NOT_FOUND, "User not found");
 
         // Prevent unverified users from resetting password
-        if (!user.isEmailOtpVerified) {
+        if (!user.isEmailVerified) {
             return ApiError(res, HTTP_STATUS.UNAUTHORIZED, "Email is not verified. Please verify your email first.");
         }
 

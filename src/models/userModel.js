@@ -19,7 +19,7 @@ const userSchema = mongoose.Schema({
         type: String,
         default: null
     },
-    isEmailOtpVerified: {
+    isEmailVerified: {
         type: Boolean,
         default: false
     },

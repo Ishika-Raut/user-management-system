@@ -10,6 +10,6 @@ export const generateOTP  =  () => {
     catch (error) 
     {
         console.log("OTP generation error!", error);
-        next(error);
+        throw error;
     }
 }

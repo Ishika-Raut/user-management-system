@@ -27,15 +27,11 @@ const userSchema = mongoose.Schema({
         type: Date,
         default: null
     },
-    passwordOtp: {
-        type: String,
-        default: null
+    passwordResetToken: {
+    type: String,
+    default: null
     },
-    isPasswordOtpVerified: {
-        type: Boolean,
-        default: false
-    },
-    passwordOtpExpiration: {
+    passwordResetTokenExpiration: {
         type: Date,
         default: null
     },

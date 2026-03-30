@@ -7,13 +7,13 @@ export const registerValidation = Joi.object({
 });
 
 
-export const sendOtpValidation = Joi.object({
+export const emailValidation = Joi.object({
   email: Joi.string().email().required()
 });
 
 
 export const verifyOtpValidation = Joi.object({
-  userId: Joi.string().length(24).hex().required(),
+  email: Joi.string().email().required(),
   otp: Joi.string().length(6).pattern(/^\d+$/).required()  // Length is 6 and Must be digits only  
 });
 

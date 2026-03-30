@@ -35,7 +35,7 @@ export const sendOtp = async (req, res, next) => {
 
         await user.save();
 
-        await sendEmail(email, otp);      
+        await sendEmail(email, otp, "emailVerification");      
 
         return ApiResponse(res, HTTP_STATUS.OK, "OTP sent successfully!");
     } 
@@ -51,12 +51,12 @@ export const sendOtp = async (req, res, next) => {
 export const verifyOtp = async (req, res, next) => {
     try 
     {
-        const {userId, otp} = req.body;
-        if(!userId || !otp)
+        const {email, otp} = req.body;
+        if(!email || !otp)
             return ApiError(res, "All fields are required!", HTTP_STATUS.BAD_REQUEST);
 
         //find user
-        const user = await User.findById(userId);
+        const user = await User.findOne({email});
         if(!user)
             return ApiError(res, "User does not exist!", HTTP_STATUS.NOT_FOUND);
 

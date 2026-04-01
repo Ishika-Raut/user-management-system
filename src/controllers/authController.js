@@ -8,60 +8,62 @@ import { generateToken } from "../utils/generateToken.js";
 import jwt from "jsonwebtoken";
 import { generateAccessAndRefreshTokens } from "../helpers/generateAccessAndRefreshTokens.js";
 import { sendEmail } from "../services/sendEmail.js";
-import { emailVerificationTemplate } from "../templates/emailVerificationTemplate.js";
 import { forgetPasswordTemplate } from "../templates/forgetPasswordTemplate.js";
-import { generateOTP } from "../utils/generateOTP.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { sendOtp } from "../helpers/resendOtp.js";
 
-export const register = asyncHandler( async (req, res, next) => {
-   
-    const {name, email, password} = req.body;
-    if(!name || !email || !password)
-        return ApiError(res, HTTP_STATUS.BAD_REQUEST, "All fields are required!");
+export const register = asyncHandler(async (req, res) => {
+    const { name, email, password } = req.body;
 
-    const user = await User.findOne({email});
-    if(user)
+    // if (!name || !email || !password)
+    //     return ApiError(res, HTTP_STATUS.BAD_REQUEST, "All fields are required!");
+
+    const existingUser = await User.findOne({ email });
+
+    // Already verified
+    if (existingUser && existingUser.isEmailVerified) {
         return ApiError(res, HTTP_STATUS.CONFLICT, `User already registered with ${email}`);
+    }
 
+    // Already exists but not verified → resend OTP
+    if (existingUser && !existingUser.isEmailVerified) 
+    {
+        await sendOtp(existingUser);
+        return ApiResponse(res, HTTP_STATUS.OK, "OTP resent successfully");
+    }
+
+    // New user registration
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    //generate 6-digit 
-    const otp = generateOTP();
-
-    //hash otp
-    const hashedOtp = await bcrypt.hash(otp, 10);
-
-    //set expiration time for generated otp
-    const expiredOtp = new Date(Date.now() + 5 * 60 * 1000);
-
     const newUser = await User.create({
-        name, 
+        name,
         email,
         password: hashedPassword,
-        emailOtp: hashedOtp ,  //store hashed otp in user
         isEmailVerified: false,
-        emailOtpExpiration: expiredOtp  //set expiration time for generated otp
+        emailOtp: null,
+        emailOtpExpiration: null,
+        otpAttempts: 0
     });
-    
-    const html = emailVerificationTemplate(otp)
-    await sendEmail(email,  "Email Verification", html);  
 
-    return ApiResponse(res, HTTP_STATUS.CREATED, "User registered successfully! OTP sent on your email.",
-        {
-            name: newUser.name,
-            email: newUser.email
-        }
+    // Send OTP
+    await sendOtp(newUser);
+
+    return ApiResponse(
+        res,
+        HTTP_STATUS.CREATED,
+        "User registered successfully! OTP sent on your email.",
+        { name: newUser.name, email: newUser.email }
     );
 });
 
 
 
-export const verifyOtp = asyncHandler( async (req, res, next) => {
+export const verifyOtp = asyncHandler( async (req, res) => {
     
     const {email, otp} = req.body;
-    if(!email || !otp)
-        return ApiError(res, "All fields are required!", HTTP_STATUS.BAD_REQUEST);
+    // if(!email || !otp)
+    //     return ApiError(res, "All fields are required!", HTTP_STATUS.BAD_REQUEST);
 
     //find user
     const user = await User.findOne({email});
@@ -75,13 +77,16 @@ export const verifyOtp = asyncHandler( async (req, res, next) => {
     if (!user.emailOtpExpiration || new Date() > user.emailOtpExpiration) {
         return ApiError(res, "OTP expired!", HTTP_STATUS.BAD_REQUEST);
     }
-    
+
     //match entered otp with stored otp in user db
-    const isOtpMatched = await bcrypt.compare(otp, user.emailOtp);
-    if(!isOtpMatched)
-        return ApiError(res, "Invalid OTP!", HTTP_STATUS.NOT_FOUND);
+    const hashedIncomingOtp = crypto.createHash("sha256").update(otp).digest("hex")
+    if (hashedIncomingOtp !== user.emailOtp)
+    {
+       return ApiError(res, "Invalid OTP!", HTTP_STATUS.NOT_FOUND);
+    }
 
     user.isEmailVerified = true;
+    user.otpAttempts = 0;
     user.emailOtp = null; 
     user.emailOtpExpiration = null; 
 
@@ -96,8 +101,8 @@ export const login = async (req, res, next) => {
     {
         const { email, password } = req.body;
         
-        if(!email || !password)
-            return ApiError(res, HTTP_STATUS.BAD_REQUEST, "All fields are required!");
+        // if(!email || !password)
+        //     return ApiError(res, HTTP_STATUS.BAD_REQUEST, "All fields are required!");
 
         const user = await User.findOne({email});
         if(!user)
@@ -222,14 +227,15 @@ export const logout = asyncHandler( async (req, res, next) => {
    
     const refreshToken = req.cookies.refreshToken;
     if (!refreshToken) {
-        return ApiError(res, HTTP_STATUS.BAD_REQUEST, "No refresh token found");
+        return ApiResponse(res, HTTP_STATUS.OK, "User already logged out!");
     }
 
     const user = await User.findOne({ refreshToken });
-    if (user) {
-        user.refreshToken = null;
-        await user.save();
-    }
+    if(!user)
+        return ApiError(res, HTTP_STATUS.NOT_FOUND, `User does not found!`);
+        
+    user.refreshToken = null;
+    await user.save();
 
     res.clearCookie("refreshToken", {
         httpOnly: true,
@@ -256,6 +262,9 @@ export const requestPasswordReset = asyncHandler( async (req, res, next) => {
     }
 
     //Generate secure token
+    //Generates 32 random bytes. Each byte is 8 bits → 32 bytes = 256 bits of entropy
+    //Why 32 bytes - Long enough to prevent brute force attacksVery secure and hard to guess
+    //.toString("hex") - Converts those 32 bytes into a hexadecimal string
     const resetToken = crypto.randomBytes(32).toString("hex");
     const tokenExpiry = new Date(Date.now() + 10 * 60 * 1000); //10 min
 
@@ -268,7 +277,7 @@ export const requestPasswordReset = asyncHandler( async (req, res, next) => {
     await user.save();
 
     // Create reset link
-    const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}&email=${email}`;
+    const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
     console.log("Reset Link = ", resetLink);
 
     const html = forgetPasswordTemplate(resetLink)
@@ -281,30 +290,38 @@ export const requestPasswordReset = asyncHandler( async (req, res, next) => {
 
 export const resetPassword = asyncHandler( async (req, res, next) => {
     
-    const { email, token, newPassword } = req.body;
+    const { token, newPassword, confirmPassword } = req.body;
     
-    if (!email || !token || !newPassword)
+    if (!token || !newPassword || !confirmPassword)
         return ApiError(res, HTTP_STATUS.BAD_REQUEST, "All fields are required");
 
-    const user = await User.findOne({ email });
-    if (!user) return ApiError(res, HTTP_STATUS.NOT_FOUND, "User not found");
+    //Hash incoming token before comparing
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    console.log("hashedToken = ", hashedToken);
+
+    console.log("passwordResetToekn = ", user.passwordResetToken);
+    // Validate token
+    if (!user.passwordResetToken || user.passwordResetToken !== hashedToken)
+        return ApiError(res, HTTP_STATUS.BAD_REQUEST, "Invalid or expired token");
+
+    if (user.passwordResetTokenExpiration < new Date())
+        return ApiError(res, HTTP_STATUS.BAD_REQUEST, "Token expired");
+
+    const user = await User.findOne({
+        passwordResetToken: hashedToken,
+        passwordResetTokenExpiration: { $gt: new Date() }
+    });
+    
+    if (!user) 
+        return ApiError(res, HTTP_STATUS.NOT_FOUND, "User not found");
 
     // Prevent unverified users from resetting password
     if (!user.isEmailVerified) {
         return ApiError(res, HTTP_STATUS.UNAUTHORIZED, "Your email is not verified.");
     }
 
-    //validate token
-    //Hash incoming token before comparing
-    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
-    console.log("hashedToken = ", hashedToken);
-    console.log("passwordResetToekn = ", user.passwordResetToken);
-    // Validate token
-    if (user.passwordResetToken !== hashedToken)
-        return ApiError(res, HTTP_STATUS.BAD_REQUEST, "Invalid or expired token");
-
-    if (user.passwordResetTokenExpiration < new Date())
-        return ApiError(res, HTTP_STATUS.BAD_REQUEST, "Token expired");
+    if(newPassword !== confirmPassword )
+        return ApiError(res, HTTP_STATUS.BAD_REQUEST, "Invalid password!");
 
     // Hash new password
     const salt = await bcrypt.genSalt(10);

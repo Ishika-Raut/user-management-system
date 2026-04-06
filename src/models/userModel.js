@@ -39,9 +39,20 @@ const userSchema = mongoose.Schema({
         type: Date,
         default: null
     },
+    //refresh token is stored one per user --> single device.
     refreshToken: {
             type: String
     }
+    /*
+     // store refresh tokens per device
+    refreshTokens: [
+        {
+            token: String,
+            deviceId: String,
+            createdAt: { type: Date, default: Date.now }
+        }
+    ]
+    */
 }, 
 {
     timestamps: true

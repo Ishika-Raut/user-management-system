@@ -99,6 +99,7 @@ export const verifyOtp = asyncHandler( async (req, res) => {
 export const login = async (req, res, next) => {
     try 
     {
+        // const { email, password, deviceId } = req.body; //deviceId sent by client
         const { email, password } = req.body;
         
         // if(!email || !password)
@@ -127,7 +128,18 @@ export const login = async (req, res, next) => {
             expiresIn: process.env.REFRESH_TOKEN_EXPIRY
         });
 
+        // This allows single device login right now.
+        // Note: Currently, user.refreshToken is one per user, 
+        // so multiple devices login would overwrite the previous refresh token.
+        // only one token per user
         user.refreshToken = refreshToken;
+
+        // Save refresh token for this device
+        // user.refreshTokens.push({ token: refreshToken, deviceId, createdAt: Date.now() });
+        // On refresh → find token by deviceId and rotate only that token.
+        // On logout → remove token for that device.
+        // On “logout all devices” → remove all tokens from array.
+
         await user.save();
         
          // store refresh token in HTTP-only cookie
@@ -173,6 +185,8 @@ export const login = async (req, res, next) => {
 export const refreshAccessToken = asyncHandler( async (req, res, next) => {
     
     const oldRefreshToken = req.cookies.refreshToken;
+    // const { deviceId } = req.body; // deviceId from client
+
     if (!oldRefreshToken)
         return ApiError(res, HTTP_STATUS.UNAUTHORIZED, "Refresh token missing");
 
@@ -199,7 +213,7 @@ export const refreshAccessToken = asyncHandler( async (req, res, next) => {
         return ApiError(res, HTTP_STATUS.FORBIDDEN, "Invalid refresh token");
     }
 
-    // Rotate tokens
+    // Rotate tokens for this device
     const { newAccessToken, newRefreshToken } = await generateAccessAndRefreshTokens(user._id);
 
     user.refreshToken = newRefreshToken;
@@ -226,6 +240,7 @@ export const refreshAccessToken = asyncHandler( async (req, res, next) => {
 export const logout = asyncHandler( async (req, res, next) => {
    
     const refreshToken = req.cookies.refreshToken;
+    // const { deviceId } = req.body;
     if (!refreshToken) {
         return ApiResponse(res, HTTP_STATUS.OK, "User already logged out!");
     }
@@ -235,6 +250,13 @@ export const logout = asyncHandler( async (req, res, next) => {
         return ApiError(res, HTTP_STATUS.NOT_FOUND, `User does not found!`);
         
     user.refreshToken = null;
+
+    // Remove refresh token for this device only - logut from this device
+    // user.refreshTokens = user.refreshTokens.filter(rt => rt.deviceId !== deviceId);
+    // OR
+    // Remove refresh token for all devices - logout from multiple device
+    // user.refreshTokens = [] //empty array;
+
     await user.save();
 
     res.clearCookie("refreshToken", {

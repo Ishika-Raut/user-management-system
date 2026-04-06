@@ -24,6 +24,18 @@ export const generateAccessAndRefreshTokens = async (userId) => {
         user.refreshToken = newRefreshToken;
         await user.save();
 
+        // Rotate refresh token in DB for a specific device
+        // const newRefreshToken = generateToken(
+        //     { id: user._id, deviceId },
+        //     process.env.REFRESH_TOKEN_SECRET,
+        //     process.env.REFRESH_TOKEN_EXPIRY
+        // );
+
+        // // Replace old token for this device
+        // user.refreshTokens = user.refreshTokens.map(rt => 
+        //     rt.deviceId === deviceId ? { token: newRefreshToken, deviceId } : rt
+        // );
+
         return {
             newAccessToken,
             newRefreshToken
